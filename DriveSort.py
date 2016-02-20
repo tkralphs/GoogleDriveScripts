@@ -45,6 +45,17 @@ class DriveSort:
         parser.add_argument('--email-domain', dest='email_domain',
                             help='Domain for e-mail addresses',
                             default=join(HOME, '.client_secret.json'))
+        parser.add_argument('--create-subfolders', dest='create_subfolders',
+                            help='Create subfolders for each file owner',
+                            default=False)
+        parser.add_argument('--move-files', dest='move_files',
+                            help='Move files to subfolders',
+                            default=False)
+        parser.add_argument('--change-permissions', dest='change_permissions',
+                            help='Change permissions on subfolders',
+                            default=False)
+        parser.add_argument('--list', dest='list_contents', action='store_true',
+                            help='List all files in folder')
         self.flags = parser.parse_args()
 
         self.authorize()
@@ -126,7 +137,7 @@ class DriveSort:
         for user_id in user_ids:
             print "Creating folder", user_id
             # Check to see if it's a dry run or folder is already there
-            if (dry_run == False or
+            if (self.flags.dry_run == False or
                 filter(lambda x: x['title'] == user_id, self.files) != []):
                 self.folderIds['user_id'] = createRemoteFolder('user_id',
                                                                folder_id)
@@ -140,7 +151,7 @@ class DriveSort:
                 user_id = f['lastModifyingUser']['emailAddress'].split('@')[0]
                 print "Moving", f['title'], 'to', user_id
                 parents = f['parents']
-                if dry_run:
+                if not self.flags.dry_run:
                     try:
                         parents[0]['id'] = self.folderIds[user_id]
                     except KeyError:
@@ -157,15 +168,17 @@ class DriveSort:
             domain = self.flags.email_domain
         files = self.getFilesInFolder(folderName)
         for f in files:
-            if f['mimeType'] != 'application/vnd.google-apps.folder':
-                print 'Sharing', f['title'], 'with', '%s@%s'% f['title'],domain 
+            if f['mimeType'] == 'application/vnd.google-apps.folder':
+                print 'Sharing', f['title'], 'with', '%s@%s'% (f['title'],
+                                                               domain) 
                 new_perm = {
                     'value' : '%s@lehigh.edu'% f['title'],
                     'type' : 'user',
                     'role' : 'reader'
                 }
-                self.drive_service.permissions().insert(fileId=f['id'],
-                                                      body = new_perm).execute()
+                if not self.flags.dry_run:
+                    self.drive_service.permissions().insert(fileId=f['id'],
+                                                     body = new_perm).execute()
 
 if __name__ == '__main__':
 
@@ -173,14 +186,19 @@ if __name__ == '__main__':
     drive = DriveSort()
     
     # Print names of all files in folder
-    for f in drive.getFilesInFolder():
-        print f['title']
+    if drive.flags.list_contents:
+        print "Folder contents:"
+        for f in drive.getFilesInFolder():
+            print f['title']
         
     #Create subfolder with same name as e-mail user ID of last modifying user
-    drive.createSubFolders()
+    if drive.flags.create_subfolders:
+        drive.createSubFolders()
 
     # Move files into folders
-    drive.moveFiles()
+    if drive.flags.move_files:
+        drive.moveFiles()
 
     # Grant permission to original owner
-    drive.changePermissions()
+    if drive.flags.change_permissions:
+        drive.changePermissions()
