@@ -46,14 +46,14 @@ class DriveSort:
                             help='Domain for e-mail addresses',
                             default=join(HOME, '.client_secret.json'))
         parser.add_argument('--create-subfolders', dest='create_subfolders',
-                            help='Create subfolders for each file owner',
-                            default=False)
+                            action='store_true',
+                            help='Create subfolders for each file owner')
         parser.add_argument('--move-files', dest='move_files',
-                            help='Move files to subfolders',
-                            default=False)
+                            action='store_true',
+                            help='Move files to subfolders')
         parser.add_argument('--change-permissions', dest='change_permissions',
-                            help='Change permissions on subfolders',
-                            default=False)
+                            action='store_true',
+                            help='Change permissions on subfolders')
         parser.add_argument('--list', dest='list_contents', action='store_true',
                             help='List all files in folder')
         self.flags = parser.parse_args()
@@ -116,16 +116,17 @@ class DriveSort:
         q = r"mimeType = 'application/vnd.google-apps.folder'"
         folders = self.drive_service.files().list(q=q).execute()['items']
         folder_id = filter(lambda x: x['title'] == folderName,
-                           folders)[0]['id']
+                                folders)[0]['id']
         # search for all files under that folder
         q = r"'{}' in parents".format(folder_id)
-        return self.drive_service.files().list(q=q,
-                                            maxResults=1000).execute()['items']
+        return (folder_id,
+                self.drive_service.files().list(q=q,
+                                        maxResults=1000).execute()['items'])
                          
     def createSubFolders(self, folderName = None):
         if folderName == None:
             folderName = self.flags.folder_name
-        files = self.getFilesInFolder(folderName)
+        folder_id, files = self.getFilesInFolder(folderName)
         user_ids = []
         for f in files:
             if f['mimeType'] != 'application/vnd.google-apps.folder':
@@ -138,14 +139,14 @@ class DriveSort:
             print "Creating folder", user_id
             # Check to see if it's a dry run or folder is already there
             if (self.flags.dry_run == False or
-                filter(lambda x: x['title'] == user_id, self.files) != []):
-                self.folderIds['user_id'] = createRemoteFolder('user_id',
-                                                               folder_id)
+                filter(lambda x: x['title'] == user_id, files) != []):
+                self.folderIds['user_id'] = self.createRemoteFolder(user_id,
+                                                                    folder_id)
 
     def moveFiles(self, folderName = None):
         if folderName == None:
             folderName = self.flags.folder_name
-        files = self.getFilesInFolder(folderName)
+        folder_id, files = self.getFilesInFolder(folderName)
         for f in files:
             if f['mimeType'] != 'application/vnd.google-apps.folder':
                 user_id = f['lastModifyingUser']['emailAddress'].split('@')[0]
@@ -153,7 +154,8 @@ class DriveSort:
                 parents = f['parents']
                 if not self.flags.dry_run:
                     try:
-                        parents[0]['id'] = self.folderIds[user_id]
+                        parents[0]['id'] = filter(lambda x: x['title'] ==
+                                                  user_id, files)[0]['id']
                     except KeyError:
                         print "Folder not found. Maybe",
                         print "run creatFolders() again?"
@@ -166,7 +168,7 @@ class DriveSort:
             folderName = self.flags.folder_name
         if domain == None:
             domain = self.flags.email_domain
-        files = self.getFilesInFolder(folderName)
+        folder_id, files = self.getFilesInFolder(folderName)
         for f in files:
             if f['mimeType'] == 'application/vnd.google-apps.folder':
                 print 'Sharing', f['title'], 'with', '%s@%s'% (f['title'],
@@ -188,7 +190,7 @@ if __name__ == '__main__':
     # Print names of all files in folder
     if drive.flags.list_contents:
         print "Folder contents:"
-        for f in drive.getFilesInFolder():
+        for f in drive.getFilesInFolder()[1]:
             print f['title']
         
     #Create subfolder with same name as e-mail user ID of last modifying user
