@@ -43,8 +43,8 @@ class DriveSort:
                             help='File in which client secret is stored',
                             default=join(HOME, '.client_secret.json'))
         parser.add_argument('--email-domain', dest='email_domain',
-                            help='Domain for e-mail addresses',
-                            default=join(HOME, '.client_secret.json'))
+                            help='Domain for e-mail addresses'
+                            default=None)
         parser.add_argument('--create-subfolders', dest='create_subfolders',
                             action='store_true',
                             help='Create subfolders for each file owner')
@@ -167,6 +167,9 @@ class DriveSort:
         if folderName == None:
             folderName = self.flags.folder_name
         if domain == None:
+            if self.flags.email_domain == None:
+                print "Must supply e-mail domain to change permissions"
+                return
             domain = self.flags.email_domain
         folder_id, files = self.getFilesInFolder(folderName)
         for f in files:
