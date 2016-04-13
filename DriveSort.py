@@ -44,7 +44,7 @@ class DriveSort:
                             default=join(HOME, '.client_secret.json'))
         parser.add_argument('--email-domain', dest='email_domain',
                             help='Domain for e-mail addresses',
-                            default=join(HOME, '.client_secret.json'))
+                            default=None)
         parser.add_argument('--create-subfolders', dest='create_subfolders',
                             action='store_true',
                             help='Create subfolders for each file owner')
@@ -115,8 +115,12 @@ class DriveSort:
             folderName = self.flags.folder_name
         q = r"mimeType = 'application/vnd.google-apps.folder'"
         folders = self.drive_service.files().list(q=q).execute()['items']
-        folder_id = filter(lambda x: x['title'] == folderName,
+        try:
+            folder_id = filter(lambda x: x['title'] == folderName,
                                 folders)[0]['id']
+        except IndexError:
+            print "ERROR: Specified folder does not exist."
+            sys.exit()
         # search for all files under that folder
         q = r"'{}' in parents".format(folder_id)
         return (folder_id,
@@ -167,7 +171,11 @@ class DriveSort:
         if folderName == None:
             folderName = self.flags.folder_name
         if domain == None:
-            domain = self.flags.email_domain
+            if self.flags.email_domain:
+                domain = self.flags.email_domain
+            else:
+                print "ERROR: Must specify e-mail domain to change permissions."
+                sys.exit()
         folder_id, files = self.getFilesInFolder(folderName)
         for f in files:
             if f['mimeType'] == 'application/vnd.google-apps.folder':
