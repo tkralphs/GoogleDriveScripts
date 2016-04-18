@@ -96,45 +96,62 @@ class DriveSort:
         http = httplib2.Http()
         http = credentials.authorize(http)
         
-        self.drive_service = build('drive', 'v2', http=http)
+        self.drive_service = build('drive', 'v3', http=http)
 
     #http://stackoverflow.com/questions/13558653/
     def createRemoteFolder(self, folderName, parentID = None):
         # Create a folder on Drive, returns the newly created folders ID
         body = {
-            'title': folderName,
+            'name': folderName,
             'mimeType': "application/vnd.google-apps.folder"
         }
         if parentID:
-            body['parents'] = [{'id': parentID}]
-        root_folder = self.drive_service.files().insert(body = body).execute()
+            body['parents'] = [parentID]
+        root_folder = self.drive_service.files().create(body = body).execute()
         return root_folder['id']
 
     def getFilesInFolder(self, folderName = None):
         if folderName == None:
             folderName = self.flags.folder_name
         q = r"mimeType = 'application/vnd.google-apps.folder'"
-        folders = self.drive_service.files().list(q=q).execute()['items']
-        try:
-            folder_id = filter(lambda x: x['title'] == folderName,
-                                folders)[0]['id']
-        except IndexError:
-            print "ERROR: Specified folder does not exist."
-            sys.exit()
+        pageToken = None
+        while True:
+            fields = "nextPageToken, "
+            fields += "files(id, name)"
+            results = self.drive_service.files().list(q=q, pageSize=1000,
+                                                      pageToken=pageToken,
+                                                      fields=fields).execute()
+            folders = results['files']
+            try:
+                folder_id = filter(lambda x: x['name'] == folderName,
+                               folders)[0]['id']
+            except IndexError:
+                pageToken = results.get('nextPageToken')
+                if not results.get('nextPageToken'):
+                    print "ERROR: Specified folder does not exist."
+                    sys.exit()
+            else:
+                break
         # search for all files under that folder
         q = r"'{}' in parents".format(folder_id)
-        return (folder_id,
-                self.drive_service.files().list(q=q,
-                                        maxResults=1000).execute()['items'])
+        fields  = ("files(id, name, mimeType, permissions, sharingUser, " +
+                   "owners, parents)")
+        return (folder_id, self.drive_service.files().list(q=q, pageSize=1000,
+                                            fields=fields).execute()['files'])
                          
     def createSubFolders(self, folderName = None):
         if folderName == None:
             folderName = self.flags.folder_name
         folder_id, files = self.getFilesInFolder(folderName)
+        print folder_id
         user_ids = []
         for f in files:
             if f['mimeType'] != 'application/vnd.google-apps.folder':
-                user_id = f['lastModifyingUser']['emailAddress'].split('@')[0]
+                # Google Drive seems to not change ownership sometimes...
+                try:
+                    user_id = f['sharingUser']['emailAddress'].split('@')[0]
+                except KeyError:
+                    user_id = f['owners'][0]['emailAddress'].split('@')[0]
                 if user_id not in user_ids:
                     user_ids.append(user_id)
                     
@@ -143,7 +160,7 @@ class DriveSort:
             print "Creating folder", user_id
             # Check to see if it's a dry run or folder is already there
             if (self.flags.dry_run == False or
-                filter(lambda x: x['title'] == user_id, files) != []):
+                filter(lambda x: x['name'] == user_id, files) != []):
                 self.folderIds['user_id'] = self.createRemoteFolder(user_id,
                                                                     folder_id)
 
@@ -153,19 +170,24 @@ class DriveSort:
         folder_id, files = self.getFilesInFolder(folderName)
         for f in files:
             if f['mimeType'] != 'application/vnd.google-apps.folder':
-                user_id = f['lastModifyingUser']['emailAddress'].split('@')[0]
-                print "Moving", f['title'], 'to', user_id
+                # Google Drive seems to not change ownership sometimes...
+                try:
+                    user_id = f['sharingUser']['emailAddress'].split('@')[0]
+                except KeyError:
+                    user_id = f['owners'][0]['emailAddress'].split('@')[0]
+                print "Moving", f['name'], 'to', user_id
                 parents = f['parents']
                 if not self.flags.dry_run:
                     try:
-                        parents[0]['id'] = filter(lambda x: x['title'] ==
-                                                  user_id, files)[0]['id']
+                        new_parent = filter(lambda x: x['name'] ==
+                                            user_id, files)[0]['id']
                     except KeyError:
                         print "Folder not found. Maybe",
                         print "run creatFolders() again?"
-                    self.drive_service.files().patch(fileId=f['id'],
-                                                    body={'parents' : parents},
-                                                    fields='parents').execute() 
+                    self.drive_service.files().update(fileId=f['id'],
+                                                      removeParents=parents[0],
+                                                      addParents=new_parent
+                                                      ).execute()
 
     def changePermissions(self, domain = None, folderName = None):
         if folderName == None:
@@ -179,16 +201,35 @@ class DriveSort:
         folder_id, files = self.getFilesInFolder(folderName)
         for f in files:
             if f['mimeType'] == 'application/vnd.google-apps.folder':
-                print 'Sharing', f['title'], 'with', '%s@%s'% (f['title'],
-                                                               domain) 
-                new_perm = {
-                    'value' : '%s@lehigh.edu'% f['title'],
-                    'type' : 'user',
-                    'role' : 'reader'
-                }
+                print 'Sharing', f['name'], 'with', '%s@%s'% (f['name'],
+                                                               domain)
+                emailAddress = f['name']+"@"+domain
+                permissionId = None
+                for perms in f['permissions']:
+                    if perms['emailAddress'] == emailAddress:
+                        permissionId = perms['id']
                 if not self.flags.dry_run:
-                    self.drive_service.permissions().insert(fileId=f['id'],
-                                                     body = new_perm).execute()
+                    if permissionId:
+                        new_perm = {
+                            'role' : 'commenter'
+                        }
+                        try:
+                            self.drive_service.permissions().update(
+                                  fileId=f['id'],
+                                  permissionId=permissionId,
+                                  body = new_perm).execute()
+                        except:
+                            print "Could not change permissions on", f['name']
+                    else:
+                        new_perm = {
+                            'emailAddress' : emailAddress,
+                            'type' : 'user',
+                            'role' : 'commenter'
+                        }
+                        self.drive_service.permissions().create(fileId=f['id'],
+                                  permissionId=permissionId,
+                                  body = new_perm).execute()
+
 
 if __name__ == '__main__':
 
@@ -199,7 +240,7 @@ if __name__ == '__main__':
     if drive.flags.list_contents:
         print "Folder contents:"
         for f in drive.getFilesInFolder()[1]:
-            print f['title']
+            print f['name']
         
     #Create subfolder with same name as e-mail user ID of last modifying user
     if drive.flags.create_subfolders:
